@@ -1,0 +1,83 @@
+name: Process Video (Release asset)
+
+on:
+  workflow_dispatch:
+    inputs:
+      pattern:
+        description: "Which asset to download (glob)"
+        required: false
+        default: "*.mp4"
+      slug:
+        description: "Output folder name under outputs/ (optional)"
+        required: false
+      lang:
+        description: "Transcript language (zh/en/auto)"
+        required: false
+        default: "zh"
+
+permissions:
+  contents: write
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg tesseract-ocr tesseract-ocr-chi-tra tesseract-ocr-eng libgl1 libglib2.0-0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install Python deps
+        run: pip install -r requirements.txt
+
+      - name: Download video from latest Release (private OK)
+        id: dl
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          # 下載「最新 Release」中符合 pattern 的資產（例如 *.mp4）
+          gh release download --latest --pattern "${{ github.event.inputs.pattern || '*.mp4' }}" --clobber --dir .
+          fname=$(ls -1 *.mp4 | head -n 1)
+          if [ -z "$fname" ]; then echo "No mp4 asset found"; exit 1; fi
+          echo "fname=$fname" >> $GITHUB_OUTPUT
+          slug="${{ github.event.inputs.slug }}"
+          if [ -z "$slug" ]; then slug="${fname%.*}"; fi
+          echo "slug=$slug" >> $GITHUB_OUTPUT
+
+      - name: Transcribe (Whisper)
+        run: |
+          mkdir -p "outputs/${{ steps.dl.outputs.slug }}"
+          python src/transcribe.py "${{ steps.dl.outputs.fname }}" \
+            --model small --lang "${{ github.event.inputs.lang }}" \
+            --out "outputs/${{ steps.dl.outputs.slug }}/transcript.srt"
+
+      - name: Keyframes (OpenCV)
+        run: |
+          python src/keyframes.py "${{ steps.dl.outputs.fname }}" \
+            --out "outputs/${{ steps.dl.outputs.slug }}/keyframes" \
+            --step 12 --threshold 28.0
+
+      - name: OCR (Tesseract)
+        run: |
+          python src/ocr.py "outputs/${{ steps.dl.outputs.slug }}/keyframes" \
+            --out "outputs/${{ steps.dl.outputs.slug }}/ocr"
+
+      - name: Summarize & Notes
+        run: |
+          python src/summarize.py "outputs/${{ steps.dl.outputs.slug }}" --out "outputs/${{ steps.dl.outputs.slug }}"
+
+      - name: Commit outputs
+        run: |
+          git config user.name "actions-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add outputs || true
+          git commit -m "Add outputs for ${{ steps.dl.outputs.slug }}" || echo "No changes"
+          git push || true
