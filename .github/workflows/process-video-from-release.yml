@@ -4,11 +4,11 @@ on:
   workflow_dispatch:
     inputs:
       pattern:
-        description: "Which asset to download (glob)"
+        description: "Which asset(s) to download from the latest Release (e.g. *.mp4 or 4.mp4)"
         required: false
         default: "*.mp4"
       slug:
-        description: "Output folder name under outputs/ (optional)"
+        description: "Output folder name under outputs/ (optional; default = filename without extension)"
         required: false
       lang:
         description: "Transcript language (zh/en/auto)"
@@ -27,7 +27,10 @@ jobs:
       - name: Install system deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y ffmpeg tesseract-ocr tesseract-ocr-chi-tra tesseract-ocr-eng libgl1 libglib2.0-0
+          sudo apt-get install -y \
+            ffmpeg \
+            tesseract-ocr tesseract-ocr-chi-tra tesseract-ocr-eng \
+            libgl1 libglib2.0-0
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -37,17 +40,31 @@ jobs:
       - name: Install Python deps
         run: pip install -r requirements.txt
 
+      # --- Download video from the latest Release (works for private repos) ---
       - name: Download video from latest Release (private OK)
         id: dl
         env:
-          GH_TOKEN: ${{ github.token }}
+            GH_TOKEN: ${{ github.token }}
+        shell: bash
         run: |
           set -e
-          # 下載「最新 Release」中符合 pattern 的資產（例如 *.mp4）
-          gh release download --latest --pattern "${{ github.event.inputs.pattern || '*.mp4' }}" --clobber --dir .
-          fname=$(ls -1 *.mp4 | head -n 1)
-          if [ -z "$fname" ]; then echo "No mp4 asset found"; exit 1; fi
+          # 1) 取得最新 Release 的 tag（例如 v1）
+          TAG=$(gh release view --json tagName --jq .tagName)
+          echo "Latest tag: $TAG"
+
+          # 2) 下載符合 pattern 的資產（預設 *.mp4；也可在 Run workflow 指定 4.mp4）
+          PATTERN="${{ github.event.inputs.pattern }}"
+          if [ -z "$PATTERN" ]; then PATTERN="*.mp4"; fi
+          gh release download "$TAG" --pattern "$PATTERN" --clobber --dir .
+
+          # 3) 取第一個下載到的 mp4 檔名
+          fname=$(ls -1 *.mp4 | head -n 1 || true)
+          if [ -z "$fname" ]; then
+            echo "No mp4 asset found in release $TAG (pattern=$PATTERN)"; exit 1
+          fi
           echo "fname=$fname" >> $GITHUB_OUTPUT
+
+          # 4) 決定輸出資料夾名稱（slug）
           slug="${{ github.event.inputs.slug }}"
           if [ -z "$slug" ]; then slug="${fname%.*}"; fi
           echo "slug=$slug" >> $GITHUB_OUTPUT
@@ -72,7 +89,8 @@ jobs:
 
       - name: Summarize & Notes
         run: |
-          python src/summarize.py "outputs/${{ steps.dl.outputs.slug }}" --out "outputs/${{ steps.dl.outputs.slug }}"
+          python src/summarize.py "outputs/${{ steps.dl.outputs.slug }}" \
+            --out "outputs/${{ steps.dl.outputs.slug }}"
 
       - name: Commit outputs
         run: |
@@ -81,3 +99,10 @@ jobs:
           git add outputs || true
           git commit -m "Add outputs for ${{ steps.dl.outputs.slug }}" || echo "No changes"
           git push || true
+
+      # （可選）如果不想把 outputs commit 回 repo，改用 Artifact：
+      # - name: Upload outputs as artifact
+      #   uses: actions/upload-artifact@v4
+      #   with:
+      #     name: outputs-${{ steps.dl.outputs.slug }}
+      #     path: outputs/${{ steps.dl.outputs.slug }}
