@@ -8,12 +8,16 @@ on:
         required: false
         default: "*.mp4"
       slug:
-        description: "Output folder name under outputs/ (optional; default = filename without extension)"
+        description: "Output folder name under outputs/ (default = filename without extension)"
         required: false
       lang:
         description: "Transcript language (zh/en/auto)"
         required: false
         default: "zh"
+      model:
+        description: "Whisper model size (tiny/base/small/medium)"
+        required: false
+        default: "small"
 
 permissions:
   contents: write
@@ -21,6 +25,7 @@ permissions:
 jobs:
   run:
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
 
@@ -44,7 +49,7 @@ jobs:
       - name: Download video from latest Release (private OK)
         id: dl
         env:
-            GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -e
@@ -73,7 +78,8 @@ jobs:
         run: |
           mkdir -p "outputs/${{ steps.dl.outputs.slug }}"
           python src/transcribe.py "${{ steps.dl.outputs.fname }}" \
-            --model small --lang "${{ github.event.inputs.lang }}" \
+            --model "${{ github.event.inputs.model }}" \
+            --lang "${{ github.event.inputs.lang }}" \
             --out "outputs/${{ steps.dl.outputs.slug }}/transcript.srt"
 
       - name: Keyframes (OpenCV)
@@ -92,6 +98,27 @@ jobs:
           python src/summarize.py "outputs/${{ steps.dl.outputs.slug }}" \
             --out "outputs/${{ steps.dl.outputs.slug }}"
 
+      # --- 移除超大暫存檔，避免超過 GitHub 100MB 限制 ---
+      - name: Remove large temp audio
+        run: |
+          rm -f "outputs/${{ steps.dl.outputs.slug }}/audio_16k.wav" || true
+          # 保險：清掉 >95MB 的檔（通常只有那個 wav）
+          find outputs -type f -size +95M -print -delete || true
+
+      # --- 保險：即使 commit 失敗也能下載成果 ---
+      - name: Show outputs tree (debug)
+        run: |
+          echo "slug=${{ steps.dl.outputs.slug }}"
+          ls -R outputs || true
+          du -h outputs || true
+
+      - name: Upload outputs as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: outputs-${{ steps.dl.outputs.slug }}
+          path: outputs/${{ steps.dl.outputs.slug }}
+          if-no-files-found: error
+
       - name: Commit outputs
         run: |
           git config user.name "actions-bot"
@@ -99,10 +126,3 @@ jobs:
           git add outputs || true
           git commit -m "Add outputs for ${{ steps.dl.outputs.slug }}" || echo "No changes"
           git push || true
-
-      # （可選）如果不想把 outputs commit 回 repo，改用 Artifact：
-      # - name: Upload outputs as artifact
-      #   uses: actions/upload-artifact@v4
-      #   with:
-      #     name: outputs-${{ steps.dl.outputs.slug }}
-      #     path: outputs/${{ steps.dl.outputs.slug }}
