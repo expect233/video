@@ -1,0 +1,79 @@
+name: Process Video (Repo file)
+
+on:
+  workflow_dispatch:
+    inputs:
+      video_path:
+        description: "Path to video inside repo (e.g., videos/lecture.mp4)"
+        required: true
+      lang:
+        description: "Transcript language (zh/en/auto)"
+        required: false
+        default: "zh"
+  push:
+    paths:
+      - 'videos/**'
+
+permissions:
+  contents: write
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg tesseract-ocr tesseract-ocr-chi-tra tesseract-ocr-eng libgl1 libglib2.0-0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install Python deps
+        run: pip install -r requirements.txt
+
+      - name: Resolve video path
+        id: vars
+        run: |
+          set -e
+          VIDEO_PATH="${{ github.event.inputs.video_path }}"
+          if [ -z "$VIDEO_PATH" ]; then
+            VIDEO_PATH="$(ls -1 videos/* 2>/dev/null | head -n 1)"
+          fi
+          echo "video_path=$VIDEO_PATH" >> $GITHUB_OUTPUT
+          slug=$(basename "$VIDEO_PATH"); slug="${slug%.*}"
+          echo "slug=$slug" >> $GITHUB_OUTPUT
+
+      - name: Transcribe (Whisper)
+        run: |
+          mkdir -p "outputs/${{ steps.vars.outputs.slug }}"
+          python src/transcribe.py "${{ steps.vars.outputs.video_path }}" \
+            --model small --lang "${{ github.event.inputs.lang || 'zh' }}" \
+            --out "outputs/${{ steps.vars.outputs.slug }}/transcript.srt"
+
+      - name: Keyframes (OpenCV)
+        run: |
+          python src/keyframes.py "${{ steps.vars.outputs.video_path }}" \
+            --out "outputs/${{ steps.vars.outputs.slug }}/keyframes" \
+            --step 12 --threshold 28.0
+
+      - name: OCR (Tesseract)
+        run: |
+          python src/ocr.py "outputs/${{ steps.vars.outputs.slug }}/keyframes" \
+            --out "outputs/${{ steps.vars.outputs.slug }}/ocr"
+
+      - name: Summarize & Notes
+        run: |
+          python src/summarize.py "outputs/${{ steps.vars.outputs.slug }}" --out "outputs/${{ steps.vars.outputs.slug }}"
+
+      - name: Commit outputs
+        run: |
+          git config user.name "actions-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add outputs || true
+          git commit -m "Add outputs for ${{ steps.vars.outputs.slug }}" || echo "No changes"
+          git push || true
