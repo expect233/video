@@ -1,0 +1,17 @@
+Example -- L- Shape
+
+A load Z,=20+j50 is to be matched to a 50 ohm
+at S5OOMHz, design the matching networks.
+
+|                    it
+|                             (12.5pF)
+
+C
+(7.7pF)
+
+己
+L (4308)
+(13nH)
+
+freq (500.0MHz to 500.0MHz)
+

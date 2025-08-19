@@ -1,0 +1,19 @@
+ch02.ppt [相容模式] - PowerPoint
+
+繪圖 設計 BS HR [投影片放映 RH CR 說明 OC 告訴我您想做什麼
+
+Example -- L- Shape
+
+A load Z,=20+j50 is to be matched to a 50 ohm
+at 500MHz, design the matching networks.
+
+1
+a
+Cc (12.5pF)
+
+freq (500.0MHz to 500.0MHz)
+
+C
+L @23pF)
+(13nH)
+
